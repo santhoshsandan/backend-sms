@@ -45,8 +45,6 @@ client.on("message", (topic, message) => {
       }
     });
 
-    console.log("📥 Updated latest values:", latestValues);
-
   } catch (err) {
     console.error("❌ Error processing MQTT message:", err);
   }
