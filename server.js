@@ -1,5 +1,6 @@
 const mqtt = require("mqtt");
 const https = require("https");
+const http = require("http");
 require("dotenv").config();
 
 const MQTT_BROKER = "mqtt://test.mosquitto.org";
@@ -35,8 +36,6 @@ client.on("message", (topic, message) => {
     const data = JSON.parse(message.toString());
     const modbusData = data?.data?.modbus?.[0] || {};
 
-    
-
     // Update latest values regardless of change, so SMS always sends latest data
     Object.entries(SENSOR_MAP).forEach(([varKey, regKey]) => {
       const currentVal = modbusData[regKey];
@@ -56,10 +55,10 @@ const sendSms = ({ var1, var2, var3, var4 }) => {
     recipients: [
       {
         mobiles: PHONE_NUMBER,
-        var1: var1 || "NA",
-        var2: var2 || "NA",
-        var3: var3 || "NA",
-        var4: var4 || "NA"
+        VAR1: var1 || "NA",
+        VAR2: var2 || "NA",
+        VAR3: var3 || "NA",
+        VAR4: var4 || "NA"
       }
     ]
   });
@@ -111,5 +110,13 @@ setInterval(() => {
   sendSms(latestValues);
 }, 3600000);
 
-// Optional: send SMS immediately on start with whatever data is available
-// sendSms(latestValues);
+// Minimal HTTP server to bind port for Render (or similar hosts)
+const port = process.env.PORT || 3000;
+http
+  .createServer((req, res) => {
+    res.writeHead(200);
+    res.end("MQTT SMS service running\n");
+  })
+  .listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+  });
