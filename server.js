@@ -1,81 +1,92 @@
 const mqtt = require("mqtt");
 const https = require("https");
+const http = require("http");
 require("dotenv").config();
- 
+
 const MQTT_BROKER = "mqtt://test.mosquitto.org";
 const MQTT_TOPIC = "devices/esp01/get/data";
- 
+
 const MSG91_AUTH_KEY = "445101Au92RrY4683eab53P1";
 const TEMPLATE_ID = "683d712cd6fc0563ef7b2762";
 const PHONE_NUMBER = "917396181785";
- 
+
 // Sensor mapping for the template
-// Assumes reg5 = Temp, reg6 = ORP, reg8 = pH, reg10 = TDS
 const SENSOR_MAP = {
   var1: "reg5",   // Water Temp (°C)
   var2: "reg6",   // ORP (mV)
   var3: "reg8",   // pH
   var4: "reg10"   // TDS (mg/L)
 };
- 
+
 const client = mqtt.connect(MQTT_BROKER);
 let lastMessage = {};
- 
+let latestValues = {
+  var1: "NA",
+  var2: "NA",
+  var3: "NA",
+  var4: "NA"
+};
+
 client.on("connect", () => {
   console.log("Connected to MQTT broker");
   client.subscribe(MQTT_TOPIC);
 });
- 
+
 client.on("message", (topic, message) => {
   try {
     const data = JSON.parse(message.toString());
     const modbusData = data?.data?.modbus?.[0] || {};
- 
-    console.log("Received modbus data:", modbusData);
- 
+
+    
+
     const valuesToSend = {};
     let shouldSend = false;
- 
+
     Object.entries(SENSOR_MAP).forEach(([varKey, regKey]) => {
       const currentVal = modbusData[regKey];
-      console.log(`Checking sensor ${varKey} mapped to ${regKey}: value=${currentVal}, lastValue=${lastMessage[regKey]}`);
-      if (currentVal !== undefined && currentVal !== lastMessage[regKey]) {
-        valuesToSend[varKey] = currentVal;
-        shouldSend = true;
-      } else if (currentVal !== undefined) {
-        valuesToSend[varKey] = currentVal;
+      console.log(`Checking ${varKey} (${regKey}): current=${currentVal}, last=${lastMessage[regKey]}`);
+      
+      if (currentVal !== undefined) {
+        latestValues[varKey] = currentVal.toString();
+        if (currentVal !== lastMessage[regKey]) {
+          valuesToSend[varKey] = currentVal;
+          shouldSend = true;
+        } else {
+          valuesToSend[varKey] = currentVal;
+        }
       }
     });
- 
+
     if (shouldSend) {
-      console.log("Sending SMS with values:", valuesToSend);
+      console.log("Sending SMS due to value change:", valuesToSend);
       sendSms(valuesToSend);
     } else {
-      console.log("No new values to send SMS for.");
+      console.log("No change detected in values, not sending SMS.");
     }
- 
+
     lastMessage = modbusData;
   } catch (err) {
     console.error("Error processing MQTT message:", err);
   }
 });
- 
+
+// Function to send SMS using MSG91
 const sendSms = ({ var1, var2, var3, var4 }) => {
   const postData = JSON.stringify({
     template_id: TEMPLATE_ID,
     recipients: [
       {
         mobiles: PHONE_NUMBER,
-        var1: var1 !== undefined ? var1.toString() : "NA",
-        var2: var2 !== undefined ? var2.toString() : "NA",
-        var3: var3 !== undefined ? var3.toString() : "NA",
-        var4: var4 !== undefined ? var4.toString() : "NA"
+        var1: var1 || "NA",
+        var2: var2 || "NA",
+        var3: var3 || "NA",
+        var4: var4 || "NA"
       }
     ]
   });
- 
+
   console.log("Sending SMS POST data:", postData);
- 
+
   const options = {
     method: "POST",
     hostname: "control.msg91.com",
@@ -87,32 +98,44 @@ const sendSms = ({ var1, var2, var3, var4 }) => {
       "content-length": Buffer.byteLength(postData)
     }
   };
- 
+
   const req = https.request(options, (res) => {
     let response = "";
-    res.on("data", (chunk) => {
-      response += chunk;
-    });
+    res.on("data", (chunk) => (response += chunk));
     res.on("end", () => {
-      console.log("SMS API Response statusCode:", res.statusCode);
-      console.log("SMS API Response body:", response);
+      console.log("SMS API Response:", res.statusCode, response);
       try {
         const jsonResponse = JSON.parse(response);
         if (jsonResponse.type === "success") {
           console.log("SMS sent successfully!");
         } else {
-          console.warn("SMS sending failed or returned error:", jsonResponse);
+          console.warn("SMS sending failed:", jsonResponse);
         }
       } catch (e) {
         console.error("Error parsing SMS response JSON:", e);
       }
     });
   });
- 
+
   req.on("error", (error) => {
     console.error("Error sending SMS:", error);
   });
- 
+
   req.write(postData);
   req.end();
 };
+
+// 🔁 Send SMS every 1 hour with latest values
+setInterval(() => {
+  console.log("⏰ Hourly SMS triggered with latest values:", latestValues);
+  sendSms(latestValues);
+}, 60 * 60 * 1000); // 1 hour in milliseconds
+
+// 🌐 HTTP Server for Render.com to keep port open
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("MQTT SMS Service is running.\n");
+}).listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
