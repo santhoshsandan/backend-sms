@@ -3,14 +3,14 @@ const https = require("https");
 const http = require("http");
 require("dotenv").config();
 
+// MQTT & Message Config
 const MQTT_BROKER = "mqtt://test.mosquitto.org";
 const MQTT_TOPIC = "devices/esp01/get/data";
-
 const MSG91_AUTH_KEY = "445101Au92RrY4683eab53P1";
 const TEMPLATE_ID = "683d712cd6fc0563ef7b2762";
 const PHONE_NUMBER = "917396181785";
 
-// Sensor mapping for the template
+// Sensor register mapping
 const SENSOR_MAP = {
   var1: "reg5",   // Water Temp (°C)
   var2: "reg6",   // ORP (mV)
@@ -18,8 +18,6 @@ const SENSOR_MAP = {
   var4: "reg10"   // TDS (mg/L)
 };
 
-const client = mqtt.connect(MQTT_BROKER);
-let lastMessage = {};
 let latestValues = {
   var1: "NA",
   var2: "NA",
@@ -27,8 +25,11 @@ let latestValues = {
   var4: "NA"
 };
 
+// Connect to MQTT
+const client = mqtt.connect(MQTT_BROKER);
+
 client.on("connect", () => {
-  console.log("Connected to MQTT broker");
+  console.log("✅ Connected to MQTT broker");
   client.subscribe(MQTT_TOPIC);
 });
 
@@ -37,40 +38,21 @@ client.on("message", (topic, message) => {
     const data = JSON.parse(message.toString());
     const modbusData = data?.data?.modbus?.[0] || {};
 
-    
-
-    const valuesToSend = {};
-    let shouldSend = false;
-
     Object.entries(SENSOR_MAP).forEach(([varKey, regKey]) => {
       const currentVal = modbusData[regKey];
-      console.log(`Checking ${varKey} (${regKey}): current=${currentVal}, last=${lastMessage[regKey]}`);
-      
       if (currentVal !== undefined) {
         latestValues[varKey] = currentVal.toString();
-        if (currentVal !== lastMessage[regKey]) {
-          valuesToSend[varKey] = currentVal;
-          shouldSend = true;
-        } else {
-          valuesToSend[varKey] = currentVal;
-        }
       }
     });
 
-    if (shouldSend) {
-      console.log("Sending SMS due to value change:", valuesToSend);
-      sendSms(valuesToSend);
-    } else {
-      console.log("No change detected in values, not sending SMS.");
-    }
+    console.log("📥 Updated latest values:", latestValues);
 
-    lastMessage = modbusData;
   } catch (err) {
-    console.error("Error processing MQTT message:", err);
+    console.error("❌ Error processing MQTT message:", err);
   }
 });
 
-// Function to send SMS using MSG91
+// Send SMS with latest values
 const sendSms = ({ var1, var2, var3, var4 }) => {
   const postData = JSON.stringify({
     template_id: TEMPLATE_ID,
@@ -85,7 +67,7 @@ const sendSms = ({ var1, var2, var3, var4 }) => {
     ]
   });
 
-  console.log("Sending SMS POST data:", postData);
+  console.log("📤 Sending SMS with:", postData);
 
   const options = {
     method: "POST",
@@ -101,41 +83,34 @@ const sendSms = ({ var1, var2, var3, var4 }) => {
 
   const req = https.request(options, (res) => {
     let response = "";
-    res.on("data", (chunk) => (response += chunk));
+    res.on("data", (chunk) => response += chunk);
     res.on("end", () => {
-      console.log("SMS API Response:", res.statusCode, response);
-      try {
-        const jsonResponse = JSON.parse(response);
-        if (jsonResponse.type === "success") {
-          console.log("SMS sent successfully!");
-        } else {
-          console.warn("SMS sending failed:", jsonResponse);
-        }
-      } catch (e) {
-        console.error("Error parsing SMS response JSON:", e);
-      }
+      console.log("📨 SMS Response:", response);
     });
   });
 
   req.on("error", (error) => {
-    console.error("Error sending SMS:", error);
+    console.error("❌ Error sending SMS:", error);
   });
 
   req.write(postData);
   req.end();
 };
 
-// 🔁 Send SMS every 1 hour with latest values
+// ⏰ Send SMS every 1 hour (3600000ms)
 setInterval(() => {
-  console.log("⏰ Hourly SMS triggered with latest values:", latestValues);
+  console.log("⏰ 1-hour interval reached. Sending SMS...");
   sendSms(latestValues);
-}, 60 * 60 * 1000); // 1 hour in milliseconds
+}, 3600000);
 
-// 🌐 HTTP Server for Render.com to keep port open
+// 🧪 Optional: send first SMS immediately on server start
+// sendSms(latestValues);
+
+// 🌐 HTTP server for Render port binding
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("MQTT SMS Service is running.\n");
+  res.writeHead(200);
+  res.end("MQTT SMS service is running.\n");
 }).listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+  console.log(`🌍 HTTP server running on port ${PORT}`);
 });
