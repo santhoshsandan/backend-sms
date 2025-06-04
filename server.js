@@ -1,70 +1,81 @@
 const mqtt = require("mqtt");
 const https = require("https");
-const http = require("http");
 require("dotenv").config();
-
+ 
 const MQTT_BROKER = "mqtt://test.mosquitto.org";
 const MQTT_TOPIC = "devices/esp01/get/data";
-
+ 
 const MSG91_AUTH_KEY = "445101Au92RrY4683eab53P1";
 const TEMPLATE_ID = "683d712cd6fc0563ef7b2762";
 const PHONE_NUMBER = "917396181785";
-
+ 
+// Sensor mapping for the template
+// Assumes reg5 = Temp, reg6 = ORP, reg8 = pH, reg10 = TDS
 const SENSOR_MAP = {
   var1: "reg5",   // Water Temp (°C)
   var2: "reg6",   // ORP (mV)
   var3: "reg8",   // pH
   var4: "reg10"   // TDS (mg/L)
 };
-
+ 
 const client = mqtt.connect(MQTT_BROKER);
-
-let latestValues = {
-  var1: "NA",
-  var2: "NA",
-  var3: "NA",
-  var4: "NA"
-};
-
+let lastMessage = {};
+ 
 client.on("connect", () => {
   console.log("Connected to MQTT broker");
   client.subscribe(MQTT_TOPIC);
 });
-
+ 
 client.on("message", (topic, message) => {
   try {
     const data = JSON.parse(message.toString());
     const modbusData = data?.data?.modbus?.[0] || {};
-
-    // Update latest values regardless of change, so SMS always sends latest data
+ 
+    console.log("Received modbus data:", modbusData);
+ 
+    const valuesToSend = {};
+    let shouldSend = false;
+ 
     Object.entries(SENSOR_MAP).forEach(([varKey, regKey]) => {
       const currentVal = modbusData[regKey];
-      if (currentVal !== undefined) {
-        latestValues[varKey] = currentVal.toString();
+      console.log(`Checking sensor ${varKey} mapped to ${regKey}: value=${currentVal}, lastValue=${lastMessage[regKey]}`);
+      if (currentVal !== undefined && currentVal !== lastMessage[regKey]) {
+        valuesToSend[varKey] = currentVal;
+        shouldSend = true;
+      } else if (currentVal !== undefined) {
+        valuesToSend[varKey] = currentVal;
       }
     });
+ 
+    if (shouldSend) {
+      console.log("Sending SMS with values:", valuesToSend);
+      sendSms(valuesToSend);
+    } else {
+      console.log("No new values to send SMS for.");
+    }
+ 
+    lastMessage = modbusData;
   } catch (err) {
     console.error("Error processing MQTT message:", err);
   }
 });
-
-// Function to send SMS with the latest values
+ 
 const sendSms = ({ var1, var2, var3, var4 }) => {
   const postData = JSON.stringify({
     template_id: TEMPLATE_ID,
     recipients: [
       {
         mobiles: PHONE_NUMBER,
-        VAR1: var1 || "NA",
-        VAR2: var2 || "NA",
-        VAR3: var3 || "NA",
-        VAR4: var4 || "NA"
+        var1: var1 !== undefined ? var1.toString() : "NA",
+        var2: var2 !== undefined ? var2.toString() : "NA",
+        var3: var3 !== undefined ? var3.toString() : "NA",
+        var4: var4 !== undefined ? var4.toString() : "NA"
       }
     ]
   });
-
+ 
   console.log("Sending SMS POST data:", postData);
-
+ 
   const options = {
     method: "POST",
     hostname: "control.msg91.com",
@@ -76,10 +87,12 @@ const sendSms = ({ var1, var2, var3, var4 }) => {
       "content-length": Buffer.byteLength(postData)
     }
   };
-
+ 
   const req = https.request(options, (res) => {
     let response = "";
-    res.on("data", (chunk) => (response += chunk));
+    res.on("data", (chunk) => {
+      response += chunk;
+    });
     res.on("end", () => {
       console.log("SMS API Response statusCode:", res.statusCode);
       console.log("SMS API Response body:", response);
@@ -95,28 +108,11 @@ const sendSms = ({ var1, var2, var3, var4 }) => {
       }
     });
   });
-
+ 
   req.on("error", (error) => {
     console.error("Error sending SMS:", error);
   });
-
+ 
   req.write(postData);
   req.end();
 };
-
-// Send SMS every 1 hour (3600000 milliseconds)
-setInterval(() => {
-  console.log("Sending hourly SMS with latest values:", latestValues);
-  sendSms(latestValues);
-}, 3600000);
-
-// Minimal HTTP server to bind port for Render (or similar hosts)
-const port = process.env.PORT || 3000;
-http
-  .createServer((req, res) => {
-    res.writeHead(200);
-    res.end("MQTT SMS service running\n");
-  })
-  .listen(port, () => {
-    console.log(`Server listening on port ${port}`);
-  });
