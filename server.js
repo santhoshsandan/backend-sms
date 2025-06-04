@@ -35,7 +35,7 @@ client.on("message", (topic, message) => {
     const data = JSON.parse(message.toString());
     const modbusData = data?.data?.modbus?.[0] || {};
 
-    console.log("Received modbus data:", modbusData);
+    
 
     // Update latest values regardless of change, so SMS always sends latest data
     Object.entries(SENSOR_MAP).forEach(([varKey, regKey]) => {
